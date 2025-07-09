@@ -19,6 +19,17 @@ By default, when you create an AWS account, AWS will create a default VPC for yo
 ## VPC components 
 
 The following features help you configure a VPC to provide the connectivity that your applications need:
+| Component                  | Description                                                               |
+| -------------------------- | ------------------------------------------------------------------------- |
+| **VPC**                    | Your isolated cloud network environment.                                  |
+| **Public Subnet**          | Subnet with a route to the internet via the Internet Gateway.             |
+| **Private Subnet**         | No direct internet access. Typically used for backend servers.            |
+| **Internet Gateway (IGW)** | Enables public subnet instances to access the internet.                   |
+| **NAT Gateway (Optional)** | Allows private subnet instances to access the internet for updates, etc.  |
+| **Route Tables**           | Define how traffic is routed between subnets and outside networks.        |
+| **Load Balancer**          | Distributes incoming traffic to instances. Supports Public/Private types. |
+
+
 
 Virtual private clouds (VPC)
 
@@ -68,6 +79,197 @@ VPC with servers in private subnets and NAT
 https://docs.aws.amazon.com/vpc/latest/userguide/vpc-example-private-subnets-nat.html
 
 ![image](https://github.com/iam-veeramalla/aws-devops-zero-to-hero/assets/43399466/89d8316e-7b70-4821-a6bf-67d1dcc4d2fb)
+
+![image](https://github.com/user-attachments/assets/a4d12ba8-0ecc-4bda-9848-3f94e3da24ce)
+
+
+You're looking for a **complete AWS VPC architecture** covering:
+
+> **Public & Private Subnets, Internet Gateway, Elastic Load Balancer, Route Tables, NAT Gateway, Target Group, Security Groups, and NACLs**, both for:
+
+* Inbound → Load Balancer → Private Subnet EC2 (via Target Group)
+* Outbound → Private Subnet EC2 → Internet (via NAT Gateway)
+
+---
+
+## ✅ **High-Level Architecture:**
+
+```
+           +----------------------+
+           |   Internet Gateway   |
+           +----------+-----------+
+                      |
+              +-------v--------+                   << PUBLIC SIDE >>
+              | Route Table 1  |----+
+              +-------+--------+    |
+                      |             |
+       +--------------+-------------+--------------+
+       |              |                            |
++------v----+   +-----v-----+              +-------v--------+
+| PubSubnet |   | PubSubnet |              | Elastic Load   |
+| (NAT-GW)  |   | (ALB)     |              | Balancer (ALB) |
++-----------+   +-----------+              +----------------+
+     |              |                             |
+     |              |                      Forwards to Target Group
+     |              |                             |
+     |              |                      +------v-------+
+     |              +--------------------->| Pvt Subnet  |
+     |                                     | EC2 (App)    |
+     |                                     +--------------+
+     |
+     |       << OUTBOUND FLOW >>
+     |                             +--------------+
+     +-----> NAT Gateway ----------> Internet GW  |
+                                   +--------------+
+```
+
+---
+
+## 🏗️ **Step-by-Step Setup**
+
+---
+
+### 🔹 **1. VPC**
+
+* CIDR: `10.0.0.0/16`
+
+---
+
+### 🔹 **2. Subnets**
+
+| Subnet Name      | CIDR Block   | AZ  | Type    | Use                     |
+| ---------------- | ------------ | --- | ------- | ----------------------- |
+| Public Subnet 1  | 10.0.1.0/24  | `a` | Public  | ALB, NAT Gateway        |
+| Public Subnet 2  | 10.0.2.0/24  | `b` | Public  | Redundancy              |
+| Private Subnet 1 | 10.0.10.0/24 | `a` | Private | App EC2s (Target Group) |
+| Private Subnet 2 | 10.0.11.0/24 | `b` | Private | App EC2s                |
+
+---
+
+### 🔹 **3. Internet Gateway**
+
+* Attach to VPC
+
+---
+
+### 🔹 **4. NAT Gateway**
+
+* In **Public Subnet**
+* Associate Elastic IP
+* Used by **Private Subnet EC2s** for **outbound internet access**
+
+---
+
+### 🔹 **5. Route Tables**
+
+#### 🔸 Public Route Table (attached to Public Subnets)
+
+| Destination | Target           |
+| ----------- | ---------------- |
+| `0.0.0.0/0` | Internet Gateway |
+
+#### 🔸 Private Route Table (attached to Private Subnets)
+
+| Destination | Target      |
+| ----------- | ----------- |
+| `0.0.0.0/0` | NAT Gateway |
+
+---
+
+### 🔹 **6. Load Balancer (ALB - Application Load Balancer)**
+
+* Deployed in **Public Subnets**
+* Forwards traffic to **Target Group** with EC2s in **Private Subnet**
+* Listener: HTTP (80) or HTTPS (443)
+
+---
+
+### 🔹 **7. Target Group**
+
+* Targets: EC2 instances in **Private Subnets**
+* Health checks: e.g., `/health`
+
+---
+
+## 🔐 **8. Security Groups**
+
+### ALB Security Group (Public)
+
+| Type     | Protocol | Port | Source      |
+| -------- | -------- | ---- | ----------- |
+| Inbound  | TCP      | 80   | `0.0.0.0/0` |
+| Outbound | ALL      | ALL  | `0.0.0.0/0` |
+
+### EC2 Security Group (Private)
+
+| Type     | Protocol | Port | Source (SG)              |
+| -------- | -------- | ---- | ------------------------ |
+| Inbound  | TCP      | 80   | ALB Security Group       |
+| Outbound | ALL      | ALL  | `0.0.0.0/0` (via NAT GW) |
+
+---
+
+## 🔒 **9. Network ACLs (NACLs)**
+
+> **NACLs are stateless**, so you must allow both inbound and outbound rules.
+
+### Public Subnet NACL (for ALB & NAT GW)
+
+**Inbound Rules:**
+
+| Rule # | Protocol | Port Range | Source    | Allow/Deny |
+| ------ | -------- | ---------- | --------- | ---------- |
+| 100    | TCP      | 80         | 0.0.0.0/0 | ALLOW      |
+| 110    | TCP      | 443        | 0.0.0.0/0 | ALLOW      |
+
+**Outbound Rules:**
+
+| Rule # | Protocol | Port Range | Destination | Allow/Deny |
+| ------ | -------- | ---------- | ----------- | ---------- |
+| 100    | TCP      | 1024-65535 | 0.0.0.0/0   | ALLOW      |
+
+---
+
+### Private Subnet NACL (for EC2s)
+
+**Inbound Rules:**
+
+| Rule # | Protocol | Port Range | Source             | Allow/Deny |
+| ------ | -------- | ---------- | ------------------ | ---------- |
+| 100    | TCP      | 80         | Public Subnet CIDR | ALLOW      |
+| 110    | TCP      | 443        | Public Subnet CIDR | ALLOW      |
+
+**Outbound Rules:**
+
+| Rule # | Protocol | Port Range | Destination | Allow/Deny |
+| ------ | -------- | ---------- | ----------- | ---------- |
+| 100    | TCP      | 80,443     | 0.0.0.0/0   | ALLOW      |
+
+---
+
+## 🔁 **Traffic Flow Summary**
+
+### 🔸 Inbound (Client → App):
+
+1. **Client** hits ALB DNS (via Internet).
+2. ALB (in Public Subnet) forwards traffic to **Target Group** (EC2 in Private Subnet).
+3. EC2 responds back via ALB → Internet Gateway.
+
+### 🔸 Outbound (App → Internet):
+
+1. Private EC2 makes HTTP request.
+2. Route table directs traffic to **NAT Gateway** (in Public Subnet).
+3. NAT Gateway → Internet Gateway → Internet.
+
+---
+
+Would you like:
+
+* **Architecture diagram?**
+* **Terraform or CloudFormation templates?**
+* **Step-by-step AWS Console screenshots/guide?**
+
+Let me know your preferred format.
 
 
 
