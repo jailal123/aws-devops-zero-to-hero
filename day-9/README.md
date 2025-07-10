@@ -1,4 +1,4 @@
-# AWS S3
+# AWS S3 : SIMPLE STORAGE SERVICE
 
 ## About 
 
